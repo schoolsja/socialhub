@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Social Hub Pro</title>
+    <style>
+        :root { --bg: #0a0b10; --card: #161821; --text: #ffffff; --primary: #6366f1; --accent: #a855f7; --border: #2d303e; }
+        .light-mode { --bg: #f0f2f5; --card: #ffffff; --text: #1c1e21; --primary: #1877f2; --accent: #4267b2; --border: #dddfe2; }
+
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); margin: 0; transition: 0.3s; display: flex; flex-direction: column; align-items: center; }
+        header { background: var(--card); width: 100%; padding: 15px; border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; display: flex; justify-content: space-between; align-items: center; box-sizing: border-box; }
+        
+        .container { width: 95%; max-width: 500px; margin-top: 20px; padding-bottom: 120px; }
+        .hidden { display: none !important; }
+        
+        .post { background: var(--card); padding: 20px; border-radius: 20px; margin-bottom: 20px; border: 1px solid var(--border); }
+        .post-media { width: 100%; border-radius: 12px; margin-top: 10px; max-height: 400px; object-fit: cover; }
+        
+        .avatar { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; background: #333; border: 2px solid var(--primary); }
+        .avatar-lg { width: 100px; height: 100px; border-radius: 50%; margin-bottom: 10px; border: 3px solid var(--primary); object-fit: cover; }
+        
+        .post-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .btn { background: linear-gradient(135deg, var(--primary), var(--accent)); color: white; border: none; padding: 10px 20px; border-radius: 12px; font-weight: bold; cursor: pointer; }
+        .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; border: 1px solid var(--border); background: rgba(120,120,120,0.1); color: var(--text); cursor: pointer; transition: 0.2s; }
+        .btn-following { background: var(--primary); color: white; border-color: var(--primary); }
+
+        .username-link { color: var(--primary); cursor: pointer; font-weight: bold; text-decoration: none; font-size: 14px; }
+        .comment-box { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .avatar-sm { width: 24px; height: 24px; border-radius: 50%; }
+
+        .nav-bar { position: fixed; bottom: 20px; background: var(--card); padding: 10px; border-radius: 50px; display: flex; gap: 10px; border: 1px solid var(--border); z-index: 1000; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        .nav-btn { padding: 10px 20px; cursor: pointer; border-radius: 30px; color: #a0a4b8; font-weight: 600; }
+        .nav-btn.active { background: var(--primary); color: white; }
+        
+        input, textarea { width: 100%; padding: 12px; background: rgba(120, 120, 120, 0.1); border: 1px solid var(--border); color: var(--text); border-radius: 10px; margin: 5px 0; outline: none; box-sizing: border-box; }
+        .stats-bar { display: flex; justify-content: center; gap: 30px; margin: 20px 0; padding: 15px; background: rgba(255,255,255,0.05); border-radius: 15px; }
+    </style>
+</head>
+<body>
+
+<div id="auth-container">
+    <div style="text-align:center; padding: 50px; max-width:400px; margin:auto;">
+        <h1 style="color: var(--primary)">Social Hub</h1>
+        <div id="signup-fields">
+            <input type="text" id="nickname" placeholder="Choose a Username">
+        </div>
+        <input type="email" id="email" placeholder="Email">
+        <input type="password" id="password" placeholder="Password">
+        
+        <button class="btn" style="width:100%" onclick="login()">Login</button>
+        <button class="btn" style="width:100%; margin-top:10px; background:none; border:1px solid var(--border);" onclick="signUp()">Sign Up</button>
+        
+        <p style="margin-top:20px; font-size:12px; opacity:0.7; cursor:pointer;" onclick="forgotPassword()">Forgot Password?</p>
+    </div>
+</div>
+
+<div id="main-app" class="hidden">
+    <header>
+        <button onclick="toggleTheme()" style="background:none; border:none; font-size:20px; cursor:pointer;">🌓</button>
+        <h3 style="margin:0; cursor:pointer;" onclick="tab('home')">SOCIAL HUB</h3>
+        <button onclick="logout()" style="background:none; border:none; color:#ff4757; font-weight:bold; cursor:pointer;">Exit</button>
+    </header>
+
+    <div class="container">
+        <div id="home-view">
+            <div style="background:var(--card); padding:20px; border-radius:20px; border:1px solid var(--border); margin-bottom:20px;">
+                <textarea id="postInput" placeholder="What's on your mind?"></textarea>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="color:var(--primary); cursor:pointer; font-size:12px; font-weight:600;">📁 Media <input type="file" id="fileInput" accept="image/*,video/*" style="display:none"></label>
+                    <button class="btn" onclick="createPost()">Post</button>
+                </div>
+            </div>
+            <div id="feed"></div>
+        </div>
+
+        <div id="search-view" class="hidden">
+            <input type="text" id="userSearch" placeholder="Search users..." oninput="searchUsers()">
+            <div id="user-results"></div>
+        </div>
+
+        <div id="profile-view" class="hidden">
+            <div style="background:var(--card); padding:25px; border-radius:24px; text-align:center; border:1px solid var(--border);">
+                <img id="prof-pic" src="https://via.placeholder.com/100" class="avatar-lg">
+                <h2 id="prof-name">@username</h2>
+                <p id="prof-bio">Bio loading...</p>
+                <div id="my-profile-controls" class="hidden">
+                    <label style="color:var(--primary); cursor:pointer; font-size:12px; font-weight:bold; display:block; margin-bottom:10px;">
+                        📸 Change Profile Picture
+                        <input type="file" id="avatarInput" accept="image/*" style="display:none" onchange="updateAvatar()">
+                    </label>
+                    <input type="text" id="usernameInput" placeholder="Change Nickname">
+                    <button class="btn-sm" style="width:100%; margin-bottom:5px;" onclick="changeUsername()">Update Nickname</button>
+                    <input type="text" id="bioInput" placeholder="Update Bio">
+                    <button class="btn-sm" style="width:100%;" onclick="updateBio()">Update Bio</button>
+                </div>
+                <div id="other-profile-controls" class="hidden">
+                    <button id="profile-follow-btn" class="btn" style="width:100%;"></button>
+                </div>
+                <div class="stats-bar">
+                    <div class="stat-item"><strong id="stat-posts">0</strong><span>Posts</span></div>
+                    <div class="stat-item"><strong id="stat-followers">0</strong><span>Followers</span></div>
+                    <div class="stat-item"><strong id="stat-following">0</strong><span>Following</span></div>
+                </div>
+            </div>
+            <div id="profile-posts-feed" style="margin-top:20px;"></div>
+        </div>
+    </div>
+
+    <div class="nav-bar">
+        <div class="nav-btn active" id="btn-home" onclick="tab('home')">Home</div>
+        <div class="nav-btn" id="btn-search" onclick="tab('search')">Explore</div>
+        <div class="nav-btn" id="btn-profile" onclick="tab('profile')">Profile</div>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, deleteDoc, updateDoc, increment, where, getDocs, getDoc, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyDtYOFVBuPYO_CGYz1JBjOGqJoknHvZClI",
+        authDomain: "socialhub-2851f.firebaseapp.com",
+        projectId: "socialhub-2851f",
+        storageBucket: "socialhub-2851f.firebasestorage.app",
+        messagingSenderId: "38201819416",
+        appId: "1:38201819416:web:db2997ca5377ac71a29e6d"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+
+    let followingList = [];
+
+    // --- AUTH WITH ERROR LOGGING ---
+    onAuthStateChanged(auth, (u) => {
+        if (u) {
+            document.getElementById('auth-container').classList.add('hidden');
+            document.getElementById('main-app').classList.remove('hidden');
+            syncFollowing();
+            loadPosts();
+        } else {
+            document.getElementById('auth-container').classList.remove('hidden');
+            document.getElementById('main-app').classList.add('hidden');
+        }
+    });
+
+    window.signUp = async () => {
+        const e = document.getElementById('email').value, p = document.getElementById('password').value, n = document.getElementById('nickname').value;
+        if (!n) return alert("Username required!");
+        try {
+            const res = await createUserWithEmailAndPassword(auth, e, p);
+            await updateProfile(res.user, { displayName: n });
+            await setDoc(doc(db, "users", res.user.uid), { 
+                username: n.toLowerCase(), avatar: '', bio: "New member", followersCount: 0, followingCount: 0 
+            });
+            location.reload();
+        } catch (err) { alert("Sign Up Failed: " + err.message); }
+    };
+
+    window.login = async () => {
+        const e = document.getElementById('email').value, p = document.getElementById('password').value;
+        try { await signInWithEmailAndPassword(auth, e, p); } 
+        catch (err) { alert("Login Failed: " + err.message); }
+    };
+
+    window.forgotPassword = async () => {
+        const e = document.getElementById('email').value;
+        if (!e) return alert("Enter your email address first.");
+        try { await sendPasswordResetEmail(auth, e); alert("Reset link sent to your email!"); }
+        catch (err) { alert("Error: " + err.message); }
+    };
+
+    // --- AVATAR & USERNAME ---
+    window.updateAvatar = async () => {
+        const file = document.getElementById('avatarInput').files[0];
+        if(!file) return;
+        const reader = new FileReader();
+        reader.onload = async () => {
+            await setDoc(doc(db, "users", auth.currentUser.uid), { avatar: reader.result }, { merge: true });
+            loadUserProfile(auth.currentUser.uid);
+        };
+        reader.readAsDataURL(file);
+    };
+
+    window.changeUsername = async () => {
+        const n = document.getElementById('usernameInput').value.trim();
+        if (n.length < 2) return alert("Too short!");
+        try {
+            await setDoc(doc(db, "users", auth.currentUser.uid), { username: n.toLowerCase(), displayName: n }, { merge: true });
+            loadUserProfile(auth.currentUser.uid);
+            alert("Updated!");
+        } catch (e) { alert("Error updating username."); }
+    };
+
+    // --- NAVIGATION ---
+    window.tab = (t, uid = null) => {
+        ['home-view', 'search-view', 'profile-view'].forEach(v => document.getElementById(v).classList.add('hidden'));
+        ['btn-home', 'btn-search', 'btn-profile'].forEach(b => document.getElementById(b)?.classList.remove('active'));
+        document.getElementById(t + '-view').classList.remove('hidden');
+        document.getElementById('btn-' + t)?.classList.add('active');
+        if (t === 'profile') loadUserProfile(uid || auth.currentUser.uid);
+    };
+
+    async function loadUserProfile(uid) {
+        const isMe = uid === auth.currentUser.uid;
+        document.getElementById('my-profile-controls').classList.toggle('hidden', !isMe);
+        document.getElementById('other-profile-controls').classList.toggle('hidden', isMe);
+        onSnapshot(doc(db, "users", uid), (d) => {
+            if (!d.exists()) return;
+            const data = d.data();
+            document.getElementById('prof-pic').src = data.avatar || 'https://via.placeholder.com/100';
+            document.getElementById('prof-name').innerText = `@${data.username}`;
+            document.getElementById('prof-bio').innerText = data.bio || "No bio yet.";
+            document.getElementById('stat-followers').innerText = data.followersCount || 0;
+            document.getElementById('stat-following').innerText = data.followingCount || 0;
+            if(!isMe) {
+                const b = document.getElementById('profile-follow-btn');
+                const f = followingList.includes(uid);
+                b.innerText = f ? "Following" : "Follow";
+                b.onclick = () => toggleFollow(uid);
+            }
+        });
+        const q = query(collection(db, "posts"), where("uid", "==", uid), orderBy("createdAt", "desc"));
+        onSnapshot(q, (snap) => renderFeed(snap, 'profile-posts-feed'));
+    }
+
+    // --- FEED (FOLLOW & COMMENTS RESTORED) ---
+    async function renderFeed(snap, targetId) {
+        const target = document.getElementById(targetId);
+        target.innerHTML = "";
+        for (const d of snap.docs) {
+            const p = d.data();
+            const uSnap = await getDoc(doc(db, "users", p.uid));
+            const uData = uSnap.exists() ? uSnap.data() : { avatar: '', username: 'User' };
+            const following = followingList.includes(p.uid);
+            const hasLiked = (p.likedBy || []).includes(auth.currentUser?.uid);
+
+            target.innerHTML += `
+                <div class="post">
+                    <div class="post-header">
+                        <img src="${uData.avatar || 'https://via.placeholder.com/40'}" class="avatar">
+                        <div style="flex-grow:1">
+                            <span class="username-link" onclick="tab('profile', '${p.uid}')">@${p.username}</span>
+                        </div>
+                        ${p.uid !== auth.currentUser.uid ? `<button class="btn-sm ${following ? 'btn-following' : ''}" onclick="toggleFollow('${p.uid}')">${following ? 'Following' : 'Follow'}</button>` : ''}
+                    </div>
+                    <p>${p.content}</p>
+                    ${p.media ? (p.mediaType === 'video' ? `<video src="${p.media}" class="post-media" controls></video>` : `<img src="${p.media}" class="post-media">`) : ''}
+                    <div style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                        <button class="btn-sm" onclick="like('${d.id}')">${hasLiked ? '❤️' : '🤍'} ${p.likes || 0}</button>
+                        <div id="comments-${d.id}" style="margin-top:10px;"></div>
+                        <input type="text" placeholder="Comment..." onkeydown="if(event.key==='Enter'){addComment('${d.id}', this.value); this.value=''}">
+                    </div>
+                </div>`;
+            loadComments(d.id);
+        }
+    }
+
+    window.addComment = async (id, text) => {
+        const u = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
+        await addDoc(collection(db, "posts", id, "comments"), { 
+            username: u.username, avatar: u.avatar || '', text, createdAt: serverTimestamp() 
+        });
+    };
+
+    function loadComments(id) {
+        onSnapshot(query(collection(db, "posts", id, "comments"), orderBy("createdAt", "asc")), (snap) => {
+            const box = document.getElementById(`comments-${id}`);
+            if(box) {
+                box.innerHTML = "";
+                snap.forEach(d => {
+                    const c = d.data();
+                    box.innerHTML += `<div class="comment-box"><img src="${c.avatar || 'https://via.placeholder.com/24'}" class="avatar-sm"><strong>${c.username}:</strong> ${c.text}</div>`;
+                });
+            }
+        });
+    }
+
+    // --- UTILS ---
+    function syncFollowing() { onSnapshot(collection(db, "users", auth.currentUser.uid, "following"), snap => followingList = snap.docs.map(d => d.id)); }
+    function loadPosts() { onSnapshot(query(collection(db, "posts"), orderBy("createdAt", "desc")), snap => renderFeed(snap, 'feed')); }
+    window.like = async (id) => {
+        const ref = doc(db, "posts", id), snap = await getDoc(ref);
+        const l = snap.data().likedBy || [];
+        l.includes(auth.currentUser.uid) ? updateDoc(ref, { likes: increment(-1), likedBy: arrayRemove(auth.currentUser.uid) }) : updateDoc(ref, { likes: increment(1), likedBy: arrayUnion(auth.currentUser.uid) });
+    };
+    window.toggleFollow = async (id) => {
+        const m = auth.currentUser.uid, f = followingList.includes(id);
+        if(f) { await deleteDoc(doc(db, "users", m, "following", id)); await updateDoc(doc(db, "users", m), { followingCount: increment(-1) }); await updateDoc(doc(db, "users", id), { followersCount: increment(-1) }); }
+        else { await setDoc(doc(db, "users", m, "following", id), { t: serverTimestamp() }); await updateDoc(doc(db, "users", m), { followingCount: increment(1) }); await updateDoc(doc(db, "users", id), { followersCount: increment(1) }); }
+    };
+    window.createPost = async () => {
+        const t = document.getElementById('postInput').value, f = document.getElementById('fileInput').files[0];
+        let m = null, tp = 'none';
+        if(f) { tp = f.type.startsWith('video') ? 'video' : 'image'; m = await new Promise(r => { const rd = new FileReader(); rd.onload = () => r(rd.result); rd.readAsDataURL(f); }); }
+        const uData = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
+        await addDoc(collection(db, "posts"), { uid: auth.currentUser.uid, username: uData.username, content: t, media: m, mediaType: tp, likes: 0, likedBy: [], createdAt: serverTimestamp() });
+        document.getElementById('postInput').value = "";
+    };
+    window.searchUsers = async () => {
+        const term = document.getElementById('userSearch').value.toLowerCase();
+        if(!term) return;
+        const q = query(collection(db, "users"), where("username", ">=", term), where("username", "<=", term + "\uf8ff"));
+        const snap = await getDocs(q);
+        const res = document.getElementById('user-results');
+        res.innerHTML = "";
+        snap.forEach(d => {
+            if(d.id === auth.currentUser.uid) return;
+            res.innerHTML += `<div class="post" onclick="tab('profile', '${d.id}')">@${d.data().username}</div>`;
+        });
+    };
+    window.updateBio = async () => { await updateDoc(doc(db, "users", auth.currentUser.uid), { bio: document.getElementById('bioInput').value }); alert("Bio Updated!"); };
+    window.toggleTheme = () => document.body.classList.toggle('light-mode');
+    window.logout = () => signOut(auth);
+</script>
+</body>
+</html>
