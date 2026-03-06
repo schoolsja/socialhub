@@ -51,12 +51,22 @@
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 10px; }
 
-        /* Comment Styling */
         .comment-item { font-size: 13px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,0.03); display: flex; flex-direction: column; gap: 4px; }
         .comment-actions { display: flex; gap: 12px; font-size: 11px; color: var(--subtext); margin-top: 2px; }
+
+        /* Error toast — shows exact Firebase error message on screen */
+        #err-toast {
+            position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%);
+            background: #ff4d4d; color: white; padding: 12px 20px; border-radius: 14px;
+            font-size: 13px; font-weight: 600; z-index: 9999; display: none;
+            max-width: 90%; text-align: center; box-shadow: 0 4px 20px rgba(255,77,77,0.5);
+            word-break: break-word;
+        }
     </style>
 </head>
 <body>
+
+<div id="err-toast"></div>
 
 <div id="modal-list" class="modal-overlay" onclick="closeModal()">
     <div class="modal-content" onclick="event.stopPropagation()">
@@ -183,11 +193,36 @@
     const State = { listeners: {}, following: [], isLoginMode: true, activeChatId: null, activeProfileId: null, defaultPic: "https://cdn-icons-png.flaticon.com/512/149/149071.png", typingTimeout: null };
     const kill = (k) => { if(State.listeners[k]) { State.listeners[k](); delete State.listeners[k]; } };
 
+    // Shows the exact Firebase error as a red toast on screen AND in console
+    const showError = (msg) => {
+        console.error('HUB ERROR:', msg);
+        const t = document.getElementById('err-toast');
+        t.innerText = '⚠️ ' + msg;
+        t.style.display = 'block';
+        clearTimeout(window._errTimer);
+        window._errTimer = setTimeout(() => { t.style.display = 'none'; }, 6000);
+    };
+
+    // Safe user doc getter — falls back gracefully if doc is missing
+    const getUserData = async (uid) => {
+        const snap = await getDoc(doc(db, "users", uid));
+        if (snap.exists()) return snap.data();
+        // Doc missing — auto-repair it so the app keeps working
+        const fallback = { username: auth.currentUser?.email?.split('@')[0] || 'user', avatar: '', followersCount: 0, followingCount: 0, postsCount: 0, online: true };
+        await setDoc(doc(db, "users", uid), fallback, { merge: true });
+        return fallback;
+    };
+
     onAuthStateChanged(auth, async (u) => {
         if (u) {
             document.getElementById('auth-screen').classList.add('hidden');
             document.getElementById('app-main').classList.remove('hidden');
-            await updateDoc(doc(db, "users", u.uid), { online: true, lastSeen: serverTimestamp() });
+            try {
+                await updateDoc(doc(db, "users", u.uid), { online: true, lastSeen: serverTimestamp() });
+            } catch(e) {
+                // Doc missing on login — create it
+                await setDoc(doc(db, "users", u.uid), { online: true, lastSeen: serverTimestamp(), username: u.email.split('@')[0], avatar: '', followersCount: 0, followingCount: 0, postsCount: 0 }, { merge: true });
+            }
             State.listeners.me = onSnapshot(collection(db, "users", u.uid, "following"), s => { State.following = s.docs.map(d => d.id); });
             nav('home');
         } else {
@@ -202,7 +237,6 @@
         document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
         document.getElementById(`v-${target}`).classList.add('active');
         if(document.getElementById(`n-${target}`)) document.getElementById(`n-${target}`).classList.add('active');
-        
         if(target === 'home') loadGlobalFeed();
         if(target === 'chat') loadGlobalChat();
         if(target === 'profile') loadUserProfile(params || auth.currentUser.uid);
@@ -213,72 +247,101 @@
 
     // --- GLOBAL CHAT ---
     window.sendGlobalChat = async () => {
-        const inp = document.getElementById('chat-in'), val = inp.value.trim();
+        const inp = document.getElementById('chat-in');
+        const val = inp.value.trim();
         if(!val || !auth.currentUser) return;
         const btn = document.getElementById('chat-send-btn');
         btn.disabled = true;
         try {
-            const u = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
-            await addDoc(collection(db, "chats"), { uid: auth.currentUser.uid, name: u.username, text: val, createdAt: serverTimestamp() });
+            const u = await getUserData(auth.currentUser.uid);
+            await addDoc(collection(db, "chats"), {
+                uid: auth.currentUser.uid,
+                name: u.username,
+                text: val,
+                createdAt: serverTimestamp()
+            });
             inp.value = "";
+        } catch(e) {
+            showError("Chat send failed: " + e.message);
         } finally {
             btn.disabled = false;
         }
     };
 
     function loadGlobalChat() {
-        State.listeners.chat = onSnapshot(query(collection(db, "chats"), orderBy("createdAt", "asc"), limit(50)), s => {
-            const b = document.getElementById('chat-mount');
-            b.innerHTML = s.docs.map(d => `<div class="msg-pop ${d.data().uid===auth.currentUser.uid?'msg-sent':'msg-rec'}"><b>${d.data().name}</b><br>${d.data().text}</div>`).join('');
-            b.scrollTop = b.scrollHeight;
-        });
+        State.listeners.chat = onSnapshot(
+            query(collection(db, "chats"), orderBy("createdAt", "asc"), limit(50)),
+            s => {
+                const b = document.getElementById('chat-mount');
+                b.innerHTML = s.docs.map(d => `<div class="msg-pop ${d.data().uid===auth.currentUser.uid?'msg-sent':'msg-rec'}"><b>${d.data().name}</b><br>${d.data().text}</div>`).join('');
+                b.scrollTop = b.scrollHeight;
+            },
+            e => showError("Chat load error: " + e.message)
+        );
     }
 
     // --- TYPING & PRIVATE MESSAGES ---
     window.handleTyping = async () => {
         if(!State.activeChatId) return;
-        await setDoc(doc(db, "conversations", State.activeChatId), { [auth.currentUser.uid]: true }, { merge: true });
-        clearTimeout(State.typingTimeout);
-        State.typingTimeout = setTimeout(async () => {
-            await setDoc(doc(db, "conversations", State.activeChatId), { [auth.currentUser.uid]: false }, { merge: true });
-        }, 2000);
+        try {
+            await setDoc(doc(db, "conversations", State.activeChatId), { [auth.currentUser.uid]: true }, { merge: true });
+            clearTimeout(State.typingTimeout);
+            State.typingTimeout = setTimeout(async () => {
+                await setDoc(doc(db, "conversations", State.activeChatId), { [auth.currentUser.uid]: false }, { merge: true });
+            }, 2000);
+        } catch(e) { /* typing indicator errors are non-critical */ }
     };
 
     async function openConversation(otherId) {
         const chatId = [auth.currentUser.uid, otherId].sort().join('_');
         State.activeChatId = chatId;
-        const otherDoc = await getDoc(doc(db, "users", otherId));
-        const other = otherDoc.data();
-        document.getElementById('dm-avatar').src = other.avatar || State.defaultPic;
-        document.getElementById('dm-name').innerText = `@${other.username}`;
+        try {
+            const other = await getUserData(otherId);
+            document.getElementById('dm-avatar').src = other.avatar || State.defaultPic;
+            document.getElementById('dm-name').innerText = `@${other.username}`;
+        } catch(e) { showError("Could not load user: " + e.message); }
 
-        State.listeners.dm = onSnapshot(query(collection(db, "conversations", chatId, "messages"), orderBy("createdAt", "asc"), limit(50)), s => {
-            const box = document.getElementById('dm-mount');
-            box.innerHTML = s.docs.map(d => `<div class="msg-pop ${d.data().uid===auth.currentUser.uid?'msg-sent':'msg-rec'}">${d.data().text}</div>`).join('');
-            box.scrollTop = box.scrollHeight;
-        });
+        State.listeners.dm = onSnapshot(
+            query(collection(db, "conversations", chatId, "messages"), orderBy("createdAt", "asc"), limit(50)),
+            s => {
+                const box = document.getElementById('dm-mount');
+                box.innerHTML = s.docs.map(d => `<div class="msg-pop ${d.data().uid===auth.currentUser.uid?'msg-sent':'msg-rec'}">${d.data().text}</div>`).join('');
+                box.scrollTop = box.scrollHeight;
+            },
+            e => showError("DM load error: " + e.message)
+        );
 
         State.listeners.typing = onSnapshot(doc(db, "conversations", chatId), snap => {
             if(snap.exists() && snap.data()[otherId] === true) document.getElementById('dm-typing').style.display = 'block';
             else document.getElementById('dm-typing').style.display = 'none';
-        });
+        }, () => {});
     }
 
     window.sendDirectMessage = async () => {
-        const inp = document.getElementById('dm-in'), val = inp.value.trim();
+        const inp = document.getElementById('dm-in');
+        const val = inp.value.trim();
         if(!val || !State.activeChatId) return;
         const btn = document.getElementById('dm-send-btn');
         btn.disabled = true;
         try {
-            await addDoc(collection(db, "conversations", State.activeChatId, "messages"), { uid: auth.currentUser.uid, text: val, createdAt: serverTimestamp() });
+            // Step 1: Save the message
+            await addDoc(collection(db, "conversations", State.activeChatId, "messages"), {
+                uid: auth.currentUser.uid,
+                text: val,
+                createdAt: serverTimestamp()
+            });
+            // Step 2: Update inbox metadata for both participants
             const otherId = State.activeChatId.split('_').find(id => id !== auth.currentUser.uid);
-            const me = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
-            const other = (await getDoc(doc(db, "users", otherId))).data();
+            const me = await getUserData(auth.currentUser.uid);
+            const other = await getUserData(otherId);
             const meta = { lastMsg: val, lastSeen: serverTimestamp() };
             await setDoc(doc(db, "users", otherId, "conversations", auth.currentUser.uid), { ...meta, username: me.username, avatar: me.avatar || '' }, { merge: true });
             await setDoc(doc(db, "users", auth.currentUser.uid, "conversations", otherId), { ...meta, username: other.username, avatar: other.avatar || '' }, { merge: true });
             inp.value = "";
+            // Step 3: Clear typing indicator
             await setDoc(doc(db, "conversations", State.activeChatId), { [auth.currentUser.uid]: false }, { merge: true });
+        } catch(e) {
+            showError("DM send failed: " + e.message);
         } finally {
             btn.disabled = false;
         }
@@ -290,7 +353,7 @@
         if(!txt && !file) return;
         const btn = document.getElementById('p-btn'); btn.disabled = true;
         try {
-            const u = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
+            const u = await getUserData(auth.currentUser.uid);
             let media = null, mType = 'none';
             if(file) {
                 mType = file.type.startsWith('video') ? 'video' : 'image';
@@ -302,11 +365,11 @@
             });
             await updateDoc(doc(db, "users", auth.currentUser.uid), { postsCount: increment(1) });
             document.getElementById('p-text').value = ""; document.getElementById('p-file').value = "";
+        } catch(e) {
+            showError("Post failed: " + e.message);
         } finally { btn.disabled = false; }
     };
 
-    // FIX: drawFeed passes post owner uid to syncComments so post owners
-    // can also delete any comment left on their own posts.
     function drawFeed(snap, targetId) {
         const box = document.getElementById(targetId);
         if (!box) return;
@@ -321,13 +384,10 @@
                 </div>
                 <p style="margin:15px 0; white-space:pre-wrap;">${p.content}</p>
                 ${p.media ? (p.mediaType==='video' ? `<video src="${p.media}" controls class="post-media"></video>` : `<img src="${p.media}" class="post-media">`) : ''}
-                
                 <div style="margin-top:15px; display:flex; gap:20px; font-size:13px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom:12px;">
                     <span class="clickable" onclick="handleLike('${id}')" style="color:${isLiked?'var(--primary)':'#fff'}">${isLiked?'❤️':'🤍'} ${p.likes||0}</span>
                 </div>
-
                 <div id="cm-mount-${id}" style="margin-top:10px;"></div>
-                
                 <div style="display:flex; gap:8px; margin-top:12px;">
                     <input type="text" id="cm-in-${id}" placeholder="Add a comment..." style="padding:8px 12px; border-radius:10px; font-size:12px;" onkeydown="if(event.key==='Enter') addComment('${id}')">
                     <button class="btn-action" style="padding:8px 14px; border-radius:10px;" onclick="addComment('${id}')">Post</button>
@@ -337,33 +397,31 @@
         snap.docs.forEach(d => syncComments(d.id, d.data().uid));
     }
 
-    // FIX: accepts postOwnerUid so both comment owner and post owner can delete comments.
     const syncComments = (pid, postOwnerUid) => {
         kill(`cm-${pid}`);
-        State.listeners[`cm-${pid}`] = onSnapshot(query(collection(db, "posts", pid, "comments"), orderBy("createdAt", "asc")), s => {
-            const el = document.getElementById(`cm-mount-${pid}`);
-            if(el) {
-                el.innerHTML = s.docs.map(d => {
-                    const c = d.data(); const cid = d.id;
-                    const cLiked = (c.likedBy || []).includes(auth.currentUser.uid);
-                    // FIX: post owner can also delete any comment on their post
-                    const canDelete = c.uid === auth.currentUser.uid || postOwnerUid === auth.currentUser.uid;
-                    return `<div class="comment-item">
-                        <div><b class="clickable" onclick="nav('profile','${c.uid}')">@${c.username}:</b> ${c.text}</div>
-                        <div class="comment-actions">
-                            <span class="clickable" onclick="handleCommentLike('${pid}', '${cid}')" style="color:${cLiked?'var(--primary)':'inherit'}">${cLiked?'❤️':'🤍'} ${c.likes||0}</span>
-                            ${canDelete ? `<span class="clickable" style="color:var(--danger)" onclick="deleteComment('${pid}', '${cid}', '${postOwnerUid}')">Delete</span>` : ''}
-                        </div>
-                    </div>`;
-                }).join('');
-            }
-        });
+        State.listeners[`cm-${pid}`] = onSnapshot(
+            query(collection(db, "posts", pid, "comments"), orderBy("createdAt", "asc")),
+            s => {
+                const el = document.getElementById(`cm-mount-${pid}`);
+                if(el) {
+                    el.innerHTML = s.docs.map(d => {
+                        const c = d.data(); const cid = d.id;
+                        const cLiked = (c.likedBy || []).includes(auth.currentUser.uid);
+                        const canDelete = c.uid === auth.currentUser.uid || postOwnerUid === auth.currentUser.uid;
+                        return `<div class="comment-item">
+                            <div><b class="clickable" onclick="nav('profile','${c.uid}')">@${c.username}:</b> ${c.text}</div>
+                            <div class="comment-actions">
+                                <span class="clickable" onclick="handleCommentLike('${pid}', '${cid}')" style="color:${cLiked?'var(--primary)':'inherit'}">${cLiked?'❤️':'🤍'} ${c.likes||0}</span>
+                                ${canDelete ? `<span class="clickable" style="color:var(--danger)" onclick="deleteComment('${pid}', '${cid}', '${postOwnerUid}')">Delete</span>` : ''}
+                            </div>
+                        </div>`;
+                    }).join('');
+                }
+            },
+            e => showError("Comments error: " + e.message)
+        );
     };
 
-    // FIX: window.addComment — must be on window because it is called from
-    // dynamically injected onclick HTML inside an ES module. Includes guard against
-    // empty input, disables input during async write to prevent double-posting,
-    // and clears + re-focuses the field on success.
     window.addComment = async (pid) => {
         const inp = document.getElementById(`cm-in-${pid}`);
         if (!inp) return;
@@ -371,41 +429,32 @@
         if(!val || !auth.currentUser) return;
         inp.disabled = true;
         try {
-            const u = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
-            await addDoc(collection(db, "posts", pid, "comments"), { 
-                uid: auth.currentUser.uid, 
-                username: u.username, 
-                text: val, 
-                likes: 0,
-                likedBy: [],
-                createdAt: serverTimestamp() 
+            const u = await getUserData(auth.currentUser.uid);
+            await addDoc(collection(db, "posts", pid, "comments"), {
+                uid: auth.currentUser.uid, username: u.username, text: val,
+                likes: 0, likedBy: [], createdAt: serverTimestamp()
             });
             inp.value = "";
+        } catch(e) {
+            showError("Comment failed: " + e.message);
         } finally {
             inp.disabled = false;
             inp.focus();
         }
     };
 
-    // FIX: window.handleCommentLike — must be on window because it is called from
-    // dynamically injected onclick HTML inside an ES module. Guards against missing doc.
     window.handleCommentLike = async (pid, cid) => {
         if (!auth.currentUser) return;
-        const r = doc(db, "posts", pid, "comments", cid);
-        const s = await getDoc(r);
-        if (!s.exists()) return;
-        const l = s.data().likedBy || [];
-        const has = l.includes(auth.currentUser.uid);
-        await updateDoc(r, { 
-            likes: increment(has ? -1 : 1), 
-            likedBy: has ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid) 
-        });
+        try {
+            const r = doc(db, "posts", pid, "comments", cid);
+            const s = await getDoc(r);
+            if (!s.exists()) return;
+            const l = s.data().likedBy || [];
+            const has = l.includes(auth.currentUser.uid);
+            await updateDoc(r, { likes: increment(has ? -1 : 1), likedBy: has ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid) });
+        } catch(e) { showError("Like failed: " + e.message); }
     };
 
-    // FIX: window.deleteComment — must be on window because it is called from
-    // dynamically injected onclick HTML inside an ES module. Verifies ownership
-    // server-side before deleting, then re-syncs the listener with the correct
-    // postOwnerUid so permission checks remain correct after deletion.
     window.deleteComment = async (pid, cid, postOwnerUid) => {
         if (!auth.currentUser) return;
         if(confirm("Delete comment?")) {
@@ -413,40 +462,41 @@
                 const cRef = doc(db, "posts", pid, "comments", cid);
                 const cSnap = await getDoc(cRef);
                 if (!cSnap.exists()) return;
-                const cData = cSnap.data();
-                const canDelete = cData.uid === auth.currentUser.uid || postOwnerUid === auth.currentUser.uid;
-                if (!canDelete) { alert("You don't have permission to delete this comment."); return; }
+                const canDelete = cSnap.data().uid === auth.currentUser.uid || postOwnerUid === auth.currentUser.uid;
+                if (!canDelete) { showError("No permission to delete this comment."); return; }
                 kill(`cm-${pid}`);
                 await deleteDoc(cRef);
                 syncComments(pid, postOwnerUid);
-            } catch(e) {
-                console.error("Delete comment error:", e);
-            }
+            } catch(e) { showError("Delete failed: " + e.message); }
         }
     };
 
-    // FIX: window.handleLike — must be on window because it is called from
-    // dynamically injected onclick HTML inside an ES module. Guards against
-    // missing post doc. Uses arrayUnion/arrayRemove to prevent duplicate likes.
     window.handleLike = async (id) => {
         if (!auth.currentUser) return;
-        const r = doc(db, "posts", id);
-        const s = await getDoc(r);
-        if (!s.exists()) return;
-        const l = s.data().likedBy || [];
-        const has = l.includes(auth.currentUser.uid);
-        await updateDoc(r, { 
-            likes: increment(has ? -1 : 1), 
-            likedBy: has ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid) 
-        });
+        try {
+            const r = doc(db, "posts", id);
+            const s = await getDoc(r);
+            if (!s.exists()) return;
+            const l = s.data().likedBy || [];
+            const has = l.includes(auth.currentUser.uid);
+            await updateDoc(r, { likes: increment(has ? -1 : 1), likedBy: has ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid) });
+        } catch(e) { showError("Like failed: " + e.message); }
     };
 
-    window.deletePost = async (id) => { if(confirm("Delete post?")) { await deleteDoc(doc(db, "posts", id)); await updateDoc(doc(db, "users", auth.currentUser.uid), { postsCount: increment(-1) }); } };
+    window.deletePost = async (id) => {
+        if(confirm("Delete post?")) {
+            try {
+                await deleteDoc(doc(db, "posts", id));
+                await updateDoc(doc(db, "users", auth.currentUser.uid), { postsCount: increment(-1) });
+            } catch(e) { showError("Delete failed: " + e.message); }
+        }
+    };
 
     // --- PROFILE & SEARCH ---
     async function loadUserProfile(uid) {
         State.activeProfileId = uid;
         State.listeners.profData = onSnapshot(doc(db, "users", uid), (uSnap) => {
+            if (!uSnap.exists()) return;
             const u = uSnap.data();
             document.getElementById('u-pic').src = u.avatar || State.defaultPic;
             document.getElementById('u-nick').innerText = `@${u.username}`;
@@ -462,8 +512,12 @@
                 const isF = State.following.includes(uid);
                 acts.innerHTML = `<button class="btn-action" onclick="toggleFollow('${uid}')">${isF?'Unfollow':'Follow'}</button><button class="btn-action" onclick="nav('dm', '${uid}')">Message</button>`;
             }
-        });
-        State.listeners.prof = onSnapshot(query(collection(db, "posts"), where("uid", "==", uid), orderBy("createdAt", "desc")), s => drawFeed(s, 'u-feed'));
+        }, e => showError("Profile error: " + e.message));
+        State.listeners.prof = onSnapshot(
+            query(collection(db, "posts"), where("uid", "==", uid), orderBy("createdAt", "desc")),
+            s => drawFeed(s, 'u-feed'),
+            e => showError("Profile feed error: " + e.message)
+        );
     }
 
     window.editUsernamePrompt = async () => {
@@ -471,17 +525,15 @@
         if(newName) await updateDoc(doc(db, "users", auth.currentUser.uid), { username: newName });
     };
 
-    // Client-side substring search — partial matches work correctly
     window.searchUsers = async (v) => {
         const mount = document.getElementById('search-mount');
         if(!v.trim()) { mount.innerHTML = ""; return; }
         const term = v.toLowerCase().trim();
-        const s = await getDocs(collection(db, "users"));
-        const matched = s.docs.filter(d => {
-            const username = (d.data().username || '').toLowerCase();
-            return username.includes(term);
-        });
-        mount.innerHTML = matched.map(d => `<div class="glass-card clickable" onclick="nav('profile', '${d.id}')" style="display:flex; align-items:center; gap:15px;"><img src="${d.data().avatar || State.defaultPic}" class="avatar"><b>@${d.data().username}</b></div>`).join('') || `<div class="glass-card" style="text-align:center; color:var(--subtext);">No users found.</div>`;
+        try {
+            const s = await getDocs(collection(db, "users"));
+            const matched = s.docs.filter(d => (d.data().username || '').toLowerCase().includes(term));
+            mount.innerHTML = matched.map(d => `<div class="glass-card clickable" onclick="nav('profile', '${d.id}')" style="display:flex; align-items:center; gap:15px;"><img src="${d.data().avatar || State.defaultPic}" class="avatar"><b>@${d.data().username}</b></div>`).join('') || `<div class="glass-card" style="text-align:center; color:var(--subtext);">No users found.</div>`;
+        } catch(e) { showError("Search failed: " + e.message); }
     };
 
     window.openRelationModal = async (type) => {
@@ -489,37 +541,59 @@
         document.getElementById('modal-title').innerText = type.charAt(0).toUpperCase() + type.slice(1);
         body.innerHTML = "Loading..."; modal.style.display = "flex";
         let users = [];
-        if(type === 'following') {
-            const s = await getDocs(collection(db, "users", State.activeProfileId, "following"));
-            for(let d of s.docs) { const u = await getDoc(doc(db, "users", d.id)); if(u.exists()) users.push({id: d.id, ...u.data()}); }
-        } else {
-            const s = await getDocs(query(collection(db, "users")));
-            for(let d of s.docs) {
-                const isF = await getDoc(doc(db, "users", d.id, "following", State.activeProfileId));
-                if(isF.exists()) users.push({id: d.id, ...d.data()});
+        try {
+            if(type === 'following') {
+                const s = await getDocs(collection(db, "users", State.activeProfileId, "following"));
+                for(let d of s.docs) { const u = await getDoc(doc(db, "users", d.id)); if(u.exists()) users.push({id: d.id, ...u.data()}); }
+            } else {
+                const s = await getDocs(query(collection(db, "users")));
+                for(let d of s.docs) {
+                    const isF = await getDoc(doc(db, "users", d.id, "following", State.activeProfileId));
+                    if(isF.exists()) users.push({id: d.id, ...d.data()});
+                }
             }
-        }
+        } catch(e) { showError("Could not load users: " + e.message); }
         body.innerHTML = users.map(u => `<div class="clickable" style="display:flex; align-items:center; gap:12px; margin-bottom:15px;" onclick="closeModal(); nav('profile','${u.id}')"><img src="${u.avatar || State.defaultPic}" class="avatar" style="width:35px; height:35px;"><b>@${u.username}</b></div>`).join('') || "None found.";
     };
 
     // --- SYSTEM ---
     window.closeModal = () => document.getElementById('modal-list').style.display = 'none';
-    const loadGlobalFeed = () => State.listeners.feed = onSnapshot(query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(25)), s => drawFeed(s, 'feed-mount'));
-    const loadInbox = () => State.listeners.inbox = onSnapshot(query(collection(db, "users", auth.currentUser.uid, "conversations"), orderBy("lastSeen", "desc")), s => {
-        document.getElementById('inbox-mount').innerHTML = s.docs.map(d => `<div class="glass-card clickable" onclick="nav('dm', '${d.id}')" style="display:flex; align-items:center; gap:15px;"><img src="${d.data().avatar || State.defaultPic}" class="avatar"><div><b>@${d.data().username}</b><div style="font-size:12px; opacity:0.6;">${d.data().lastMsg}</div></div></div>`).join('');
-    });
+    const loadGlobalFeed = () => State.listeners.feed = onSnapshot(
+        query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(25)),
+        s => drawFeed(s, 'feed-mount'),
+        e => showError("Feed error: " + e.message)
+    );
+    const loadInbox = () => State.listeners.inbox = onSnapshot(
+        query(collection(db, "users", auth.currentUser.uid, "conversations"), orderBy("lastSeen", "desc")),
+        s => { document.getElementById('inbox-mount').innerHTML = s.docs.map(d => `<div class="glass-card clickable" onclick="nav('dm', '${d.id}')" style="display:flex; align-items:center; gap:15px;"><img src="${d.data().avatar || State.defaultPic}" class="avatar"><div><b>@${d.data().username}</b><div style="font-size:12px; opacity:0.6;">${d.data().lastMsg}</div></div></div>`).join(''); },
+        e => showError("Inbox error: " + e.message)
+    );
     window.toggleFollow = async (id) => {
         const me = auth.currentUser.uid, isF = State.following.includes(id);
-        if(isF) { await deleteDoc(doc(db, "users", me, "following", id)); await updateDoc(doc(db, "users", me), { followingCount: increment(-1) }); await updateDoc(doc(db, "users", id), { followersCount: increment(-1) }); }
-        else { await setDoc(doc(db, "users", me, "following", id), { active: true }); await updateDoc(doc(db, "users", me), { followingCount: increment(1) }); await updateDoc(doc(db, "users", id), { followersCount: increment(1) }); }
+        try {
+            if(isF) { await deleteDoc(doc(db, "users", me, "following", id)); await updateDoc(doc(db, "users", me), { followingCount: increment(-1) }); await updateDoc(doc(db, "users", id), { followersCount: increment(-1) }); }
+            else { await setDoc(doc(db, "users", me, "following", id), { active: true }); await updateDoc(doc(db, "users", me), { followingCount: increment(1) }); await updateDoc(doc(db, "users", id), { followersCount: increment(1) }); }
+        } catch(e) { showError("Follow failed: " + e.message); }
     };
-    window.uploadAvatar = () => { const f = document.getElementById('up-av').files[0]; if(!f) return; const rd = new FileReader(); rd.onload = async () => { await updateDoc(doc(db, "users", auth.currentUser.uid), { avatar: rd.result }); nav('profile'); }; rd.readAsDataURL(f); };
+    window.uploadAvatar = () => { const f = document.getElementById('up-av').files[0]; if(!f) return; const rd = new FileReader(); rd.onload = async () => { try { await updateDoc(doc(db, "users", auth.currentUser.uid), { avatar: rd.result }); nav('profile'); } catch(e) { showError("Avatar upload failed: " + e.message); } }; rd.readAsDataURL(f); };
     window.handleAuth = async () => {
         const e = document.getElementById('auth-email').value, p = document.getElementById('auth-pass').value;
-        try { if(State.isLoginMode) await signInWithEmailAndPassword(auth, e, p); else { const n = document.getElementById('auth-nick').value.toLowerCase(); const res = await createUserWithEmailAndPassword(auth, e, p); await setDoc(doc(db, "users", res.user.uid), { username: n, avatar: '', followersCount: 0, followingCount: 0, postsCount: 0, online: true }); } } catch(e) { alert(e.message); }
+        try {
+            if(State.isLoginMode) {
+                await signInWithEmailAndPassword(auth, e, p);
+            } else {
+                const n = document.getElementById('auth-nick').value.toLowerCase().trim();
+                if(!n) { alert("Please enter a username"); return; }
+                const res = await createUserWithEmailAndPassword(auth, e, p);
+                await setDoc(doc(db, "users", res.user.uid), { username: n, avatar: '', followersCount: 0, followingCount: 0, postsCount: 0, online: true });
+            }
+        } catch(e) { alert(e.message); }
     };
     window.toggleAuth = () => { State.isLoginMode = !State.isLoginMode; document.getElementById('signup-fields').classList.toggle('hidden', State.isLoginMode); };
-    window.logout = async () => { if(auth.currentUser) await updateDoc(doc(db, "users", auth.currentUser.uid), { online: false }); signOut(auth); };
+    window.logout = async () => {
+        if(auth.currentUser) { try { await updateDoc(doc(db, "users", auth.currentUser.uid), { online: false }); } catch(e) {} }
+        signOut(auth);
+    };
 </script>
 </body>
 </html>
