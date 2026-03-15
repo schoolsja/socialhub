@@ -471,16 +471,33 @@
         } finally { btn.disabled = false; }
     };
 
-    function drawFeed(snap, targetId) {
+    // Verified status cache — avoids re-fetching same user doc on every feed render
+    const _verifiedCache = {};
+    const isUserVerified = async (uid) => {
+        if (_verifiedCache[uid] !== undefined) return _verifiedCache[uid];
+        try {
+            const snap = await getDoc(doc(db, "users", uid));
+            _verifiedCache[uid] = snap.exists() ? (snap.data().verified || false) : false;
+        } catch(e) { _verifiedCache[uid] = false; }
+        return _verifiedCache[uid];
+    };
+
+    async function drawFeed(snap, targetId) {
         const box = document.getElementById(targetId);
         if (!box) return;
+        // Pre-fetch verified status for all unique authors in one pass
+        const uids = [...new Set(snap.docs.map(d => d.data().uid))];
+        await Promise.all(uids.map(uid => isUserVerified(uid)));
+
         box.innerHTML = snap.docs.map(d => {
-            const p = d.data(); const id = d.id; const isLiked = (p.likedBy || []).includes(auth.currentUser.uid);
+            const p = d.data(); const id = d.id;
+            const isLiked = (p.likedBy || []).includes(auth.currentUser.uid);
+            const isVerified = _verifiedCache[p.uid] || false;
             return `<div class="glass-card">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div class="clickable" onclick="nav('profile','${p.uid}')" style="display:flex; align-items:center; gap:10px;">
                         <img src="${p.avatar}" class="avatar">
-                        <span class="username-row"><b>@${p.username}</b>${p.verified?verifiedHTML:''}</span>
+                        <span class="username-row"><b>@${p.username}</b>${isVerified?verifiedHTML:''}</span>
                     </div>
                     ${p.uid === auth.currentUser.uid || State.isAdmin ? `<button onclick="deletePost('${id}','${p.uid}')" style="background:none; border:none; color:var(--danger); cursor:pointer;">🗑️</button>` : ''}
                 </div>
@@ -731,11 +748,13 @@
         if (!State.isAdmin) return;
         try {
             await updateDoc(doc(db, "users", uid), { verified: !isVerified });
-            // Update local state
+            // Clear verified cache so feed/search/profile show updated badge instantly
+            delete _verifiedCache[uid];
+            // Update local admin list state
             const u = State.allAdminUsers.find(u => u.id === uid);
             if (u) u.verified = !isVerified;
             showSuccess(isVerified ? "Verification removed." : "User verified ✓");
-            // Refresh just that row
+            // Refresh admin panel row
             const term = document.getElementById('admin-search').value;
             filterAdminUsers(term);
         } catch(e) { showError("Failed: " + e.message); }
