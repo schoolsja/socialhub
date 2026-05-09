@@ -1759,27 +1759,6 @@
         } catch(e) { showError("Failed: " + e.message); }
     };
 
-    const loadGroups = () => {
-        if (!auth.currentUser) return;
-        State.listeners.groups = onSnapshot(
-            query(collection(db, "groups"), where("members", "array-contains", auth.currentUser.uid)),
-            s => {
-                const mount = document.getElementById('groups-mount');
-                if (!mount) return;
-                mount.innerHTML = s.docs.map(d => {
-                    const g = d.data();
-                    return `<div class="group-item" onclick="nav('groupdm','${d.id}')">
-                        <div class="group-avatar">💬</div>
-                        <div>
-                            <div style="font-weight:700; font-size:13.5px;">${g.name}</div>
-                            <div style="font-size:11px; color:var(--text-3);">${g.members.length} members</div>
-                        </div>
-                    </div>`;
-                }).join('') || '<div style="color:var(--text-3); font-size:13px;">No groups yet.</div>';
-            }
-        );
-    };
-
     window.openGroupConversation = async (groupId) => {
         State.activeGroupId = groupId;
         const section = document.getElementById('v-groupdm');
@@ -2916,13 +2895,6 @@
     // ── SYSTEM ──
     window.closeModal = () => document.getElementById('modal-list').style.display = 'none';
 
-    // ── HAPTIC FEEDBACK ──
-    const haptic = (type = 'light') => {
-        if (!navigator.vibrate) return;
-        const patterns = { light: [10], medium: [20], success: [10, 50, 10], error: [50, 30, 50] };
-        navigator.vibrate(patterns[type] || [10]);
-    };
-
     // ── MORE MENU ──
     window.toggleMoreMenu = (id) => {
         closeAllMoreMenus(null, id);
@@ -2938,7 +2910,6 @@
     // ── DOUBLE-TAP LIKE ──
     window.doubleTapLike = (id, e) => {
         const card = e.currentTarget;
-        // Burst heart
         const heart = document.createElement('div');
         heart.className = 'heart-burst';
         heart.textContent = '❤️';
@@ -2946,7 +2917,6 @@
         card.appendChild(heart);
         setTimeout(() => heart.remove(), 700);
         handleLike(id, card.querySelector('.like-btn'));
-        haptic('medium');
     };
 
     // ── MEDIA SELECTED ──
@@ -2969,32 +2939,7 @@
         document.body.appendChild(overlay);
     };
 
-    // ── ONBOARDING TIPS ──
-    const initOnboarding = () => {
-        const dismissed = JSON.parse(localStorage.getItem('hub_tips_dismissed') || '[]');
-        ['home'].forEach(key => {
-            if (!dismissed.includes(key)) {
-                const el = document.getElementById(`onboard-${key}`);
-                if (el) el.style.display = 'flex';
-            }
-        });
-        // Restore draft
-        const draft = localStorage.getItem('hub_draft');
-        const ta = document.getElementById('p-text');
-        if (draft && ta) {
-            ta.value = draft;
-            updateCharCounter(ta);
-        }
-    };
-    window.dismissTip = (key) => {
-        const el = document.getElementById(`onboard-${key}`);
-        if (el) el.style.display = 'none';
-        const dismissed = JSON.parse(localStorage.getItem('hub_tips_dismissed') || '[]');
-        dismissed.push(key);
-        localStorage.setItem('hub_tips_dismissed', JSON.stringify(dismissed));
-    };
-
-    // ── SETTINGS ──
+    // ── SETTINGS (window functions only — consts are in polish layer) ──
     window.applyFontSize = (size) => {
         document.documentElement.style.setProperty('--base-font', size + 'px');
         document.querySelectorAll('.post-body, .comment-body').forEach(el => el.style.fontSize = size + 'px');
@@ -3009,64 +2954,15 @@
         try { await updateDoc(doc(db, "users", auth.currentUser.uid), { [`privacy_${key}`]: val }); showSuccess("Setting saved."); } catch(e) {}
     };
     window.showBlockedUsers = () => { showSuccess("Blocked users list coming soon."); };
-
-    const loadSettings = () => {
-        // Restore settings
-        const fs = localStorage.getItem('hub_font_size');
-        if (fs) { document.getElementById('font-size-select').value = fs; applyFontSize(fs); }
-        const rm = localStorage.getItem('hub_reduce_motion');
-        if (rm === 'true') { document.getElementById('reduce-motion-toggle').checked = true; applyReduceMotion(true); }
+    window.dismissTip = (key) => {
+        const el = document.getElementById(`onboard-${key}`);
+        if (el) el.style.display = 'none';
+        const dismissed = JSON.parse(localStorage.getItem('hub_tips_dismissed') || '[]');
+        dismissed.push(key);
+        localStorage.setItem('hub_tips_dismissed', JSON.stringify(dismissed));
     };
 
-    // ── PULL TO REFRESH ──
-    const initPullToRefresh = () => {
-        let startY = 0, pulling = false;
-        const indicator = document.getElementById('pull-indicator');
-        const arrow = document.getElementById('pull-arrow');
-        const text = document.getElementById('pull-text');
-        document.addEventListener('touchstart', e => { if (window.scrollY === 0) { startY = e.touches[0].clientY; pulling = true; } }, { passive: true });
-        document.addEventListener('touchmove', e => {
-            if (!pulling) return;
-            const dy = e.touches[0].clientY - startY;
-            if (dy > 20) { indicator.classList.add('visible'); }
-            if (dy > 70) { arrow.style.transform = 'rotate(180deg)'; text.textContent = 'Release to refresh'; }
-            else { arrow.style.transform = ''; text.textContent = 'Pull to refresh'; }
-        }, { passive: true });
-        document.addEventListener('touchend', e => {
-            if (!pulling) return;
-            const dy = e.changedTouches[0].clientY - startY;
-            indicator.classList.remove('visible');
-            arrow.style.transform = '';
-            if (dy > 70) { haptic('medium'); loadGlobalFeed(); loadStories(); showSuccess("Feed refreshed!"); }
-            pulling = false;
-        });
-    };
-
-    // ── SWIPE STORY NAVIGATION ──
-    const initStorySwipe = () => {
-        const viewer = document.getElementById('story-viewer');
-        let sx = 0;
-        viewer.addEventListener('touchstart', e => { sx = e.touches[0].clientX; }, { passive: true });
-        viewer.addEventListener('touchend', e => {
-            const dx = e.changedTouches[0].clientX - sx;
-            if (Math.abs(dx) > 60) { closeStory(); }
-        });
-    };
-
-    // ── OFFLINE DETECTION ──
-    const initOfflineDetection = () => {
-        const offBanner = document.getElementById('offline-banner');
-        const reconBanner = document.getElementById('reconnect-banner');
-        window.addEventListener('offline', () => { offBanner.classList.add('show'); });
-        window.addEventListener('online', () => {
-            offBanner.classList.remove('show');
-            reconBanner.style.display = 'block';
-            setTimeout(() => { reconBanner.style.display = 'none'; }, 3000);
-        });
-        if (!navigator.onLine) offBanner.classList.add('show');
-    };
-
-    // ── NOTIFICATIONS (updated with empty state + mark all) ──
+    // ── NOTIFICATIONS (mark all) ──
     window.markAllNotifsRead = async () => {
         try {
             const s = await getDocs(query(collection(db, "users", auth.currentUser.uid, "notifications"), where("read","==",false)));
@@ -3410,36 +3306,6 @@
         if (mount && mount.innerHTML === '') showRecentSearches();
     };
 
-    // ── PATCH drawFeed for empty states & skeleton + double-tap ──
-    const _origDrawFeed = drawFeed;
-    const drawFeed = async (snap, targetId) => {
-        const box = document.getElementById(targetId);
-        if (!box) return;
-        const uids = [...new Set(snap.docs.map(d => d.data().uid))];
-        await Promise.all(uids.map(uid => isUserVerified(uid)));
-        if (snap.empty) {
-            box.innerHTML = emptyState('feed', targetId === 'feed-mount' ? `<button class="btn-action" onclick="document.getElementById('p-text').focus()" style="font-size:12px; padding:9px 18px;">✍️ Write something</button>` : '');
-            return;
-        }
-        box.innerHTML = snap.docs.map(d => renderPostCard(d.id, d.data())).join('');
-        snap.docs.forEach(d => syncComments(d.id, d.data().uid));
-        // Animate new posts in
-        box.querySelectorAll('.post-card').forEach((el, i) => {
-            el.style.animationDelay = `${i * 40}ms`;
-            el.classList.add('post-in');
-        });
-    };
-
-    // ── PATCH loadGlobalFeed to show skeleton ──
-    const loadGlobalFeed = () => {
-        showFeedSkeleton('feed-mount');
-        State.listeners.feed = onSnapshot(
-            query(collection(db, "posts"), orderBy("createdAt", "desc"), limit(25)),
-            s => drawFeed(s, 'feed-mount'),
-            e => showError("Feed error: " + e.message)
-        );
-    };
-
     // ── PATCH loadNotifications for empty state ──
     const _origLoadNotifications = loadNotifications;
     window.loadNotifications = async () => {
@@ -3470,57 +3336,6 @@
             }).join('');
             for (const d of s.docs) if (!d.data().read) await updateDoc(doc(db, "users", auth.currentUser.uid, "notifications", d.id), { read: true });
         } catch(e) { mount.innerHTML = emptyState('notifications'); }
-    };
-
-    // ── PATCH loadInbox for empty state ──
-    const loadInbox = () => {
-        const mount = document.getElementById('inbox-mount');
-        mount.innerHTML = `<div class="skeleton" style="height:64px; border-radius:var(--r-md); margin-bottom:8px;"></div>`.repeat(3);
-        State.listeners.inbox = onSnapshot(
-            query(collection(db, "users", auth.currentUser.uid, "conversations"), orderBy("lastSeen", "desc")),
-            async s => {
-                if (s.empty) { mount.innerHTML = emptyState('inbox', `<button class="btn-action" onclick="nav('search')" style="font-size:12px; padding:9px 18px;">🔍 Find People</button>`); return; }
-                const uids = s.docs.map(d => d.id);
-                await Promise.all(uids.map(uid => isUserVerified(uid)));
-                mount.innerHTML = s.docs.map(d => {
-                    const conv = d.data();
-                    const contactVerified = _verifiedCache[d.id] || false;
-                    return `<div class="inbox-item" onclick="nav('dm', '${d.id}')" role="button" tabindex="0">
-                        <img src="${conv.avatar || State.defaultPic}" class="avatar" alt="">
-                        <div class="inbox-text">
-                            <div class="inbox-name"><span>@${conv.username}</span>${contactVerified?verifiedHTML:''}</div>
-                            <div class="inbox-preview">${conv.lastMsg||''}</div>
-                        </div>
-                        <span style="font-size:14px; color:var(--text-3);">›</span>
-                    </div>`;
-                }).join('');
-            },
-            e => showError("Inbox error: " + e.message)
-        );
-    };
-
-    // ── PATCH loadGroups for empty state ──
-    const loadGroups = () => {
-        if (!auth.currentUser) return;
-        State.listeners.groups = onSnapshot(
-            query(collection(db, "groups"), where("members", "array-contains", auth.currentUser.uid)),
-            s => {
-                const mount = document.getElementById('groups-mount');
-                if (!mount) return;
-                if (s.empty) { mount.innerHTML = emptyState('groups'); return; }
-                mount.innerHTML = s.docs.map(d => {
-                    const g = d.data();
-                    return `<div class="group-item" onclick="nav('groupdm','${d.id}')">
-                        <div class="group-avatar">💬</div>
-                        <div>
-                            <div style="font-weight:700; font-size:13.5px;">${g.name}</div>
-                            <div style="font-size:11px; color:var(--text-3);">${g.members.length} members</div>
-                        </div>
-                        <span style="margin-left:auto; color:var(--text-3); font-size:16px;">›</span>
-                    </div>`;
-                }).join('');
-            }
-        );
     };
 
     // ── ONLINE STATUS TIMESTAMPS ──
@@ -3596,34 +3411,7 @@
         });
     };
 
-    // ── DRAFT RESTORE ──
-    const restoreDraft = () => {
-        const draft = localStorage.getItem('hub_draft');
-        const ta = document.getElementById('p-text');
-        if (draft && ta) {
-            ta.value = draft;
-            updateCharCounter(ta);
-            const di = document.getElementById('draft-indicator');
-            if (di) di.style.display = 'inline';
-        }
-    };
-
-    // ── ONBOARDING ──
-    const initOnboarding = () => {
-        const dismissed = JSON.parse(localStorage.getItem('hub_tips_dismissed') || '[]');
-        ['home'].forEach(key => {
-            const el = document.getElementById(`onboard-${key}`);
-            if (el && !dismissed.includes(key)) el.style.display = 'flex';
-        });
-        restoreDraft();
-    };
-    window.dismissTip = (key) => {
-        const el = document.getElementById(`onboard-${key}`);
-        if (el) el.style.display = 'none';
-        const d = JSON.parse(localStorage.getItem('hub_tips_dismissed') || '[]');
-        d.push(key);
-        localStorage.setItem('hub_tips_dismissed', JSON.stringify(d));
-    };
+    // ── ONBOARDING (defined in polish layer below) ──
 
     // ── SETTINGS ──
     window.applyFontSize = (size) => {
