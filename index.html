@@ -5,12 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Hub</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#050810">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="HUB">
-    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/149/149071.png">
     <style>
         :root {
             --bg:        #050810;
@@ -1215,7 +1214,8 @@
 </section>
 
 <script>
-  if ('serviceWorker' in navigator) {
+  // Service worker only registered when served from correct scope
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !location.hostname.includes('github.io')) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/socialhub/sw.js')
         .then(reg => console.log('SW registered:', reg.scope))
@@ -1228,7 +1228,6 @@
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, serverTimestamp, doc, setDoc, deleteDoc, updateDoc, increment, where, getDoc, getDocs, arrayUnion, arrayRemove, limit, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-
     const firebaseConfig = {
         apiKey: "AIzaSyDtYOFVBuPYO_CGYz1JBjOGqJoknHvZClI",
         authDomain: "socialhub-2851f.firebaseapp.com",
