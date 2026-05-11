@@ -1903,7 +1903,22 @@
         const val = inp.value.trim();
         if(!val || !State.activeChatId) return;
         if(isFiltered(val)) { showError("Message contains blocked content."); return; }
-        const btn = document.getElementById('dm-send-btn'); btn.disabled = true;
+        const btn = document.getElementById('dm-send-btn');
+        // Clear input and show optimistic bubble immediately
+        inp.value = "";
+        btn.disabled = true;
+        haptic('light');
+        // Optimistic bubble
+        const box = document.getElementById('dm-mount');
+        if (box) {
+            const tempId = 'opt-' + Date.now();
+            const wrap = document.createElement('div');
+            wrap.className = 'msg-wrap'; wrap.id = tempId;
+            wrap.style.alignItems = 'flex-end';
+            wrap.innerHTML = `<div class="msg-pop msg-sent" style="opacity:0.65;">${val.replace(/</g,'&lt;')}<span class="msg-time">sending…</span></div>`;
+            box.appendChild(wrap);
+            box.scrollTop = box.scrollHeight;
+        }
         try {
             await addDoc(collection(db, "conversations", State.activeChatId, "messages"), { uid: auth.currentUser.uid, text: val, createdAt: serverTimestamp(), readBy: [auth.currentUser.uid] });
             const otherId = State.activeChatId.split('_').find(id => id !== auth.currentUser.uid);
@@ -1912,10 +1927,16 @@
             const meta = { lastMsg: val, lastSeen: serverTimestamp() };
             await setDoc(doc(db, "users", otherId, "conversations", auth.currentUser.uid), { ...meta, username: me.username, avatar: me.avatar || '' }, { merge: true });
             await setDoc(doc(db, "users", auth.currentUser.uid, "conversations", otherId), { ...meta, username: other.username, avatar: other.avatar || '' }, { merge: true });
-            inp.value = "";
             await setDoc(doc(db, "conversations", State.activeChatId), { [auth.currentUser.uid]: false }, { merge: true });
             await pushNotification(otherId, 'dm', auth.currentUser.uid, { preview: val.slice(0,60) });
-        } catch(e) { showError("DM send failed: " + e.message); } finally { btn.disabled = false; }
+        } catch(e) {
+            showError("DM send failed: " + e.message);
+            // Restore input on failure
+            inp.value = val;
+        } finally {
+            btn.disabled = false;
+            inp.focus();
+        }
     };
 
     // ── FEED ──
@@ -2291,34 +2312,42 @@
 
     window.handleLike = async (id, el) => {
         if (!auth.currentUser) return;
-        // Optimistic update
-        const likeBtn = el || document.querySelector(`#pcard-${id} .like-btn`);
+        const likeBtn = el instanceof Element ? el : document.querySelector(`#pcard-${id} .like-btn`);
+        if (!likeBtn) return;
+        // Prevent double-click
+        if (likeBtn.dataset.liking === '1') return;
+        likeBtn.dataset.liking = '1';
+        const wasLiked = likeBtn.classList.contains('liked');
         const countEl = document.getElementById(`like-count-${id}`);
-        const wasLiked = likeBtn?.classList.contains('liked');
-        if (likeBtn) {
-            likeBtn.classList.toggle('liked', !wasLiked);
-            likeBtn.innerHTML = `${!wasLiked?'❤️':'🤍'} <span id="like-count-${id}">${(parseInt(countEl?.textContent||'0') + (!wasLiked?1:-1))}</span>`;
-            likeBtn.classList.add('like-pop');
-            setTimeout(() => likeBtn.classList.remove('like-pop'), 350);
-        }
-        haptic('light');
+        const oldCount = parseInt(countEl?.textContent || '0');
+        // Optimistic update
+        likeBtn.classList.toggle('liked', !wasLiked);
+        if (countEl) countEl.textContent = Math.max(0, oldCount + (!wasLiked ? 1 : -1));
+        likeBtn.innerHTML = `${!wasLiked?'❤️':'🤍'} <span id="like-count-${id}">${Math.max(0, oldCount + (!wasLiked ? 1 : -1))}</span>`;
+        likeBtn.classList.add('like-pop');
+        setTimeout(() => likeBtn.classList.remove('like-pop'), 350);
+        if (typeof haptic === 'function') haptic('light');
         try {
             const r = doc(db, "posts", id);
             const s = await getDoc(r);
-            if (!s.exists()) return;
+            if (!s.exists()) { likeBtn.dataset.liking = '0'; return; }
             const l = s.data().likedBy || [];
             const has = l.includes(auth.currentUser.uid);
-            await updateDoc(r, { likes: increment(has ? -1 : 1), likedBy: has ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid) });
+            // Use actual server state to decide direction (prevents desyncs)
+            await updateDoc(r, {
+                likes: increment(has ? -1 : 1),
+                likedBy: has ? arrayRemove(auth.currentUser.uid) : arrayUnion(auth.currentUser.uid)
+            });
             if (!has && s.data().uid !== auth.currentUser.uid) {
                 await pushNotification(s.data().uid, 'like', auth.currentUser.uid, { postId: id });
             }
         } catch(e) {
-            // Revert optimistic update on failure
-            if (likeBtn) {
-                likeBtn.classList.toggle('liked', wasLiked);
-                likeBtn.innerHTML = `${wasLiked?'❤️':'🤍'} <span id="like-count-${id}">${(parseInt(countEl?.textContent||'0') + (wasLiked?1:-1))}</span>`;
-            }
-            showError("Like failed."); 
+            // Revert on failure
+            likeBtn.classList.toggle('liked', wasLiked);
+            likeBtn.innerHTML = `${wasLiked?'❤️':'🤍'} <span id="like-count-${id}">${oldCount}</span>`;
+            showError("Like failed — try again.");
+        } finally {
+            likeBtn.dataset.liking = '0';
         }
     };
 
@@ -2850,16 +2879,32 @@
     // ── SYSTEM ──
     window.closeModal = () => document.getElementById('modal-list').style.display = 'none';
 
-    // ── MORE MENU ──
-    window.toggleMoreMenu = (id) => {
-        closeAllMoreMenus(null, id);
+    // ── MORE MENU — single authoritative version ──
+    window.toggleMoreMenu = (id, e) => {
+        if (e) e.stopPropagation();
         const menu = document.getElementById(id);
-        if (menu) { menu.classList.toggle('open'); }
-        setTimeout(() => document.addEventListener('click', closeAllMoreMenus, { once: true }), 100);
+        if (!menu) return;
+        const isOpen = menu.style.display === 'block';
+        // Close all first
+        document.querySelectorAll('.more-menu').forEach(m => { m.style.display = 'none'; });
+        // Toggle this one
+        menu.style.display = isOpen ? 'none' : 'block';
+        if (!isOpen) {
+            // Close on next outside click
+            setTimeout(() => {
+                const handler = (ev) => {
+                    if (!menu.contains(ev.target)) {
+                        menu.style.display = 'none';
+                    }
+                    document.removeEventListener('click', handler);
+                };
+                document.addEventListener('click', handler);
+            }, 50);
+        }
     };
-    window.closeMoreMenu = (id) => { const m = document.getElementById(id); if (m) m.classList.remove('open'); };
-    const closeAllMoreMenus = (e, except) => {
-        document.querySelectorAll('.more-menu.open').forEach(m => { if (!except || m.id !== except) m.classList.remove('open'); });
+    window.closeMoreMenu = (id) => {
+        const m = document.getElementById(id);
+        if (m) m.style.display = 'none';
     };
 
     // ── DOUBLE-TAP LIKE ──
@@ -2883,28 +2928,7 @@
         showSuccess(`📎 ${file.name.slice(0,20)} selected`);
     };
 
-    // ── IMAGE VIEWER ──
-    window.openImageViewer = (src) => {
-        const overlay = document.createElement('div');
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;cursor:zoom-out;';
-        const img = document.createElement('img');
-        img.src = src; img.style.cssText = 'max-width:95vw;max-height:95dvh;border-radius:12px;object-fit:contain;';
-        overlay.appendChild(img);
-        overlay.onclick = () => overlay.remove();
-        document.body.appendChild(overlay);
-    };
-
-    // ── SETTINGS (window functions only — consts are in polish layer) ──
-    window.applyFontSize = (size) => {
-        document.documentElement.style.setProperty('--base-font', size + 'px');
-        document.querySelectorAll('.post-body, .comment-body').forEach(el => el.style.fontSize = size + 'px');
-        localStorage.setItem('hub_font_size', size);
-    };
-    window.applyReduceMotion = (on) => {
-        document.documentElement.style.setProperty('--t-fast', on ? '0s' : '0.15s');
-        document.documentElement.style.setProperty('--t-med', on ? '0s' : '0.25s');
-        localStorage.setItem('hub_reduce_motion', on);
-    };
+    // ── SETTINGS (defined fully in loadGroups/loadSettings section below) ──
     window.savePrivacySetting = async (key, val) => {
         try { await updateDoc(doc(db, "users", auth.currentUser.uid), { [`privacy_${key}`]: val }); showSuccess("Setting saved."); } catch(e) {}
     };
@@ -3245,32 +3269,6 @@
         }
     };
 
-    // ── OPTIMISTIC SEND MESSAGE ──
-    const _origSendDM = window.sendDirectMessage;
-    window.sendDirectMessage = async () => {
-        const inp = document.getElementById('dm-in');
-        const val = inp.value.trim();
-        if (!val) return;
-        // Optimistic bubble
-        const box = document.getElementById('dm-mount');
-        if (box) {
-            const tempId = 'opt-' + Date.now();
-            const wrap = document.createElement('div');
-            wrap.className = 'msg-wrap msg-in'; wrap.id = tempId;
-            wrap.style.alignItems = 'flex-end';
-            wrap.innerHTML = `<div class="msg-pop msg-sent" style="opacity:0.7;">${val}<span class="msg-time">sending…</span></div>`;
-            box.appendChild(wrap);
-            box.scrollTop = box.scrollHeight;
-            inp.value = '';
-            haptic('light');
-            await _origSendDM();
-            const temp = document.getElementById(tempId);
-            if (temp) temp.remove();
-        } else {
-            await _origSendDM();
-        }
-    };
-
     // ── SEARCH TABS (users / posts / hashtags) ──
     window.switchSearchTab = async (tab) => {
         document.querySelectorAll('.search-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
@@ -3487,33 +3485,6 @@
         if (!navigator.vibrate) return;
         const patterns = { light:[8], medium:[20], success:[8,40,8], error:[40,25,40] };
         navigator.vibrate(patterns[type] || [8]);
-    };
-
-    // ── IMAGE VIEWER (full-screen tap) ──
-    window.openImageViewer = (src) => {
-        const overlay = document.createElement('div');
-        overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.96);display:flex;align-items:center;justify-content:center;cursor:zoom-out;animation:fadeIn 0.2s ease;';
-        const img = document.createElement('img');
-        img.src = src; img.style.cssText = 'max-width:96vw;max-height:94dvh;border-radius:14px;object-fit:contain;';
-        const close = document.createElement('button');
-        close.innerHTML='✕'; close.style.cssText='position:absolute;top:18px;right:18px;background:rgba(255,255,255,0.12);border:none;color:white;width:38px;height:38px;border-radius:50%;font-size:18px;cursor:pointer;';
-        overlay.append(img, close);
-        close.onclick = overlay.onclick = () => overlay.remove();
-        img.onclick = e => e.stopPropagation();
-        document.body.appendChild(overlay);
-    };
-
-    // ── MORE MENU: close on outside click ──
-    document.addEventListener('click', () => {
-        document.querySelectorAll('.more-menu').forEach(m => m.style.display = 'none');
-    });
-    window.toggleMoreMenu = (id, e) => {
-        e && e.stopPropagation();
-        const menu = document.getElementById(id);
-        if (!menu) return;
-        const wasOpen = menu.style.display === 'block';
-        document.querySelectorAll('.more-menu').forEach(m => m.style.display = 'none');
-        menu.style.display = wasOpen ? 'none' : 'block';
     };
 
     // ── INITIALISE all on-load ──
